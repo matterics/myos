@@ -12,3 +12,4 @@ noto-fonts
 open-vm-tools
 qemu-guest-agent
 ttf-jetbrains-mono
+xorg-xwayland
