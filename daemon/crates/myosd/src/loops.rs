@@ -9,7 +9,7 @@
 //! no tool side effects beyond the loop's own project directory.
 
 use crate::providers;
-use crate::state::{LoopDef, LoopRunRecord, ProjectDef, Store, MAX_RUNS_PER_LOOP, state_dir};
+use crate::state::{LoopDef, LoopRunRecord, MAX_RUNS_PER_LOOP, ProjectDef, Store, state_dir};
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -34,7 +34,11 @@ pub fn slugify(name: &str) -> String {
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect();
     let slug = slug.trim_matches('-').to_string();
-    if slug.is_empty() { "project".into() } else { slug }
+    if slug.is_empty() {
+        "project".into()
+    } else {
+        slug
+    }
 }
 
 pub fn projects_dir() -> PathBuf {
@@ -57,9 +61,7 @@ pub fn spawn_scheduler(store: Arc<Store>) {
                         l.enabled
                             && match l.last_run_at {
                                 None => true,
-                                Some(last) => {
-                                    now - last >= (l.interval_minutes as i64).max(1) * 60
-                                }
+                                Some(last) => now - last >= (l.interval_minutes as i64).max(1) * 60,
                             }
                     })
                     .map(|l| l.id.clone())
@@ -112,20 +114,22 @@ pub async fn run_loop(store: &Arc<Store>, loop_id: &str) -> Result<LoopRunRecord
             record.report = "No AI provider connected; loop skipped.".into();
         }
         Some((pid, pc)) => {
-            let model = match providers::effective_model(&pid, &pc.api_key, pc.model.as_deref())
-                .await
-            {
-                Ok(m) => m,
-                Err(e) => {
-                    record.report = format!("Run skipped: {e}");
-                    record.finished_at = Some(now());
-                    let saved = record.clone();
-                    store.update(|c| {
-                        c.loop_runs.entry(loop_id.to_string()).or_default().push(saved);
-                    })?;
-                    return Ok(record);
-                }
-            };
+            let model =
+                match providers::effective_model(&pid, &pc.api_key, pc.model.as_deref()).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        record.report = format!("Run skipped: {e}");
+                        record.finished_at = Some(now());
+                        let saved = record.clone();
+                        store.update(|c| {
+                            c.loop_runs
+                                .entry(loop_id.to_string())
+                                .or_default()
+                                .push(saved);
+                        })?;
+                        return Ok(record);
+                    }
+                };
             let system = loop_system_prompt(&def, project.as_ref());
             let prior = last_report(&cfg, loop_id);
             let mut user = format!("Loop goal:\n{}\n", def.goal);
@@ -135,8 +139,13 @@ pub async fn run_loop(store: &Arc<Store>, loop_id: &str) -> Result<LoopRunRecord
                 ));
             }
             user.push_str("\nProduce this run's report now.");
-            let mut rx =
-                providers::stream_chat(&pid, &pc.api_key, &model, &system, vec![("user".into(), user)]);
+            let mut rx = providers::stream_chat(
+                &pid,
+                &pc.api_key,
+                &model,
+                &system,
+                vec![("user".into(), user)],
+            );
             let mut full = String::new();
             let mut failed = None;
             while let Some(item) = rx.recv().await {
@@ -258,7 +267,12 @@ fn loop_system_prompt(def: &LoopDef, project: Option<&ProjectDef>) -> String {
         _ => "L1 (report-only)",
     };
     let project_line = project
-        .map(|p| format!("You are advancing the project \"{}\" at {}.", p.name, p.path))
+        .map(|p| {
+            format!(
+                "You are advancing the project \"{}\" at {}.",
+                p.name, p.path
+            )
+        })
         .unwrap_or_else(|| "This loop has no project attached.".into());
     format!(
         "You are a MyOS loop runner executing the loop \"{name}\" at autonomy level {level}. \

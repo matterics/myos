@@ -59,12 +59,15 @@ fn device_profile() -> pb::DeviceProfile {
 
 fn system_prompt() -> String {
     let p = device_profile();
-    
+
     // Centralize context window for all LLMs in the system
     let mut system_context = String::new();
     system_context.push_str(&format!("- Active OS: MyOS {}\n", p.os_version));
-    system_context.push_str(&format!("- Current Time: {}\n", chrono::Local::now().to_rfc2822()));
-    
+    system_context.push_str(&format!(
+        "- Current Time: {}\n",
+        chrono::Local::now().to_rfc2822()
+    ));
+
     format!(
         "You are {agent}, the built-in assistant and operator of MyOS, an AI-native operating \
          system. You are running on the device \"{device}\" (MyOS {ver}) with full authority \
@@ -146,7 +149,10 @@ async fn run_host_command(cmd: &str) -> String {
         s.push_str(&err);
     }
     if !out.status.success() {
-        s.push_str(&format!("\n[exit code: {}]", out.status.code().unwrap_or(-1)));
+        s.push_str(&format!(
+            "\n[exit code: {}]",
+            out.status.code().unwrap_or(-1)
+        ));
     }
     let s = s.trim().to_string();
     if s.is_empty() {
@@ -277,34 +283,31 @@ impl Agent for AgentService {
                         }
                     }
                     Some((id, pc)) => {
-                        let model = match providers::effective_model(
-                            &id,
-                            &pc.api_key,
-                            pc.model.as_deref(),
-                        )
-                        .await
-                        {
-                            Ok(m) => {
-                                // Remember the fallback so the model chip matches reality.
-                                if pc.model.as_deref() != Some(m.as_str()) {
-                                    let _ = store.update(|c| {
-                                        if let Some(p) = c.providers.get_mut(&id) {
-                                            p.model = Some(m.clone());
-                                        }
-                                    });
+                        let model =
+                            match providers::effective_model(&id, &pc.api_key, pc.model.as_deref())
+                                .await
+                            {
+                                Ok(m) => {
+                                    // Remember the fallback so the model chip matches reality.
+                                    if pc.model.as_deref() != Some(m.as_str()) {
+                                        let _ = store.update(|c| {
+                                            if let Some(p) = c.providers.get_mut(&id) {
+                                                p.model = Some(m.clone());
+                                            }
+                                        });
+                                    }
+                                    m
                                 }
-                                m
-                            }
-                            Err(e) => {
-                                let _ = tx
-                                    .send(Ok(error_event("model_unavailable", e.to_string())))
-                                    .await;
-                                if tx.send(Ok(turn_done(conv_id))).await.is_err() {
-                                    return;
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(Ok(error_event("model_unavailable", e.to_string())))
+                                        .await;
+                                    if tx.send(Ok(turn_done(conv_id))).await.is_err() {
+                                        return;
+                                    }
+                                    continue;
                                 }
-                                continue;
-                            }
-                        };
+                            };
                         let mut iterations = 0usize;
                         'agent: loop {
                             let mut deltas = providers::stream_chat(
@@ -325,10 +328,7 @@ impl Agent for AgentService {
                                     }
                                     Err(e) => {
                                         let _ = tx
-                                            .send(Ok(error_event(
-                                                "provider_error",
-                                                e.to_string(),
-                                            )))
+                                            .send(Ok(error_event("provider_error", e.to_string())))
                                             .await;
                                         break 'agent;
                                     }
@@ -351,9 +351,7 @@ impl Agent for AgentService {
 
                             let mut results = String::from("[MyOS] Command results:\n");
                             for cmd in commands {
-                                let _ = tx
-                                    .send(Ok(delta_event(format!("\n\n⚙️ `{cmd}`\n"))))
-                                    .await;
+                                let _ = tx.send(Ok(delta_event(format!("\n\n⚙️ `{cmd}`\n")))).await;
                                 let output = run_host_command(&cmd).await;
                                 let _ = tx
                                     .send(Ok(delta_event(format!("```\n{output}\n```\n\n"))))
@@ -508,9 +506,15 @@ impl Agent for AgentService {
         } else {
             None
         };
-        
+
         let models: Vec<pb::Model> = if let Some(dyn_m) = dynamic_models {
-            dyn_m.into_iter().map(|(mid, name)| pb::Model { id: mid, display_name: name }).collect()
+            dyn_m
+                .into_iter()
+                .map(|(mid, name)| pb::Model {
+                    id: mid,
+                    display_name: name,
+                })
+                .collect()
         } else {
             providers::models(&id)
                 .iter()
@@ -520,7 +524,7 @@ impl Agent for AgentService {
                 })
                 .collect()
         };
-        
+
         let selected = cfg
             .providers
             .get(&id)
@@ -545,10 +549,14 @@ impl Agent for AgentService {
                 if let Some(dyn_m) = providers::fetch_models(&req.provider_id, &p.api_key).await {
                     dyn_m.iter().any(|(id, _)| *id == req.model_id)
                 } else {
-                    providers::models(&req.provider_id).iter().any(|m| m.id == req.model_id)
+                    providers::models(&req.provider_id)
+                        .iter()
+                        .any(|m| m.id == req.model_id)
                 }
             } else {
-                providers::models(&req.provider_id).iter().any(|m| m.id == req.model_id)
+                providers::models(&req.provider_id)
+                    .iter()
+                    .any(|m| m.id == req.model_id)
             }
         };
 
@@ -601,14 +609,14 @@ impl Agent for AgentService {
                     p
                 })
                 .unwrap_or_else(|| "Empty chat".into());
-            
+
             sessions.push(pb::ChatSession {
                 id: id.clone(),
                 preview,
                 last_updated: None, // Simplified timestamp
             });
         }
-        
+
         // Sort sessions so "default" or newer is at the top if possible, here just returning as-is
         Ok(Response::new(pb::ChatHistoryList { sessions }))
     }
@@ -656,10 +664,7 @@ impl Agent for AgentService {
         Ok(Response::new(loop_to_pb(&def)))
     }
 
-    async fn list_loops(
-        &self,
-        _request: Request<()>,
-    ) -> Result<Response<pb::LoopList>, Status> {
+    async fn list_loops(&self, _request: Request<()>) -> Result<Response<pb::LoopList>, Status> {
         let cfg = self.store.get();
         let mut loops: Vec<pb::Loop> = cfg.loops.values().map(loop_to_pb).collect();
         loops.sort_by(|a, b| {
@@ -703,10 +708,7 @@ impl Agent for AgentService {
         Ok(Response::new(run_to_pb(&run)))
     }
 
-    async fn delete_loop(
-        &self,
-        request: Request<pb::LoopId>,
-    ) -> Result<Response<()>, Status> {
+    async fn delete_loop(&self, request: Request<pb::LoopId>) -> Result<Response<()>, Status> {
         let id = request.into_inner().id;
         let mut existed = false;
         self.store
