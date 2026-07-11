@@ -1,0 +1,22 @@
+pkgname=myos-shell
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='MyOS shell — the chat-first Flutter UI'
+arch=('x86_64')
+url='https://myos.dev'
+license=('MIT')
+depends=('gtk3' 'cage' 'greetd' 'bash' 'myosd')
+options=('!debug' '!strip')
+source=(
+  'myos-shell-bundle.tar.gz'
+  'myos-shell'
+  'myos-session'
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -d "$pkgdir/usr/lib/myos-shell"
+  cp -a "$srcdir/bundle/." "$pkgdir/usr/lib/myos-shell/"
+  install -Dm755 "$srcdir/myos-shell" "$pkgdir/usr/bin/myos-shell"
+  install -Dm755 "$srcdir/myos-session" "$pkgdir/usr/bin/myos-session"
+}

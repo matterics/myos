@@ -1,0 +1,11 @@
+NAME="MyOS"
+PRETTY_NAME="MyOS M1 (Arch Linux)"
+ID=myos
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;124;92;255"
+HOME_URL="https://myos.dev"
+DOCUMENTATION_URL="https://myos.dev/docs"
+IMAGE_ID=myos
+IMAGE_VERSION=dev
+

@@ -1,0 +1,35 @@
+name: MyOS M0
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build toolchain image
+        run: docker build -t myos-build -f ci/archlinux-build.Containerfile .
+      - name: Test source
+        run: docker run --rm -v "$PWD:/src" -w /src myos-build bash ./scripts/test.sh
+      - name: Build packages
+        run: docker run --rm -v "$PWD:/src" -w /src myos-build bash ./scripts/build-packages.sh
+
+  iso:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build toolchain image
+        run: docker build -t myos-build -f ci/archlinux-build.Containerfile .
+      - name: Build ISO
+        run: |
+          docker volume create myos-pacman-cache
+          docker run --rm --privileged -v "$PWD:/src" -v "myos-pacman-cache:/var/cache/pacman/pkg" -w /src myos-build bash ./scripts/build-iso.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myos-m0-iso
+          path: out/myos-*.iso
+          if-no-files-found: error

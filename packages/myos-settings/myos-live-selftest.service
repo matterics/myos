@@ -1,0 +1,12 @@
+[Unit]
+Description=MyOS M0 boot acceptance signal
+ConditionKernelCommandLine=myos.autotest=1
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/myos-live-selftest
+
+[Install]
+WantedBy=multi-user.target
+

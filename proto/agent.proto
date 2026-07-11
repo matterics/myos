@@ -1,0 +1,222 @@
+syntax = "proto3";
+
+package myos.agent.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// Agent is the only privileged boundary exposed to the MyOS shell.
+service Agent {
+  rpc Chat(stream ClientEvent) returns (stream ServerEvent);
+  rpc GetDeviceProfile(google.protobuf.Empty) returns (DeviceProfile);
+  rpc ListProviders(google.protobuf.Empty) returns (ProviderList);
+  rpc ConnectProvider(ConnectRequest) returns (stream ConnectProgress);
+  rpc SelectProvider(ProviderId) returns (google.protobuf.Empty);
+  rpc ListModels(ProviderId) returns (ModelList);
+  rpc SelectModel(SelectModelRequest) returns (google.protobuf.Empty);
+  rpc GetAuditLog(AuditQuery) returns (stream AuditEntry);
+  rpc Onboard(OnboardConfig) returns (google.protobuf.Empty);
+}
+
+message ClientEvent {
+  oneof event {
+    UserMessage message = 1;
+    ConfirmResponse confirm = 2;
+    CancelTurn cancel = 3;
+  }
+}
+
+message ServerEvent {
+  oneof event {
+    TextDelta text_delta = 1;
+    ToolCallStart tool_start = 2;
+    ToolCallEnd tool_end = 3;
+    ConfirmRequest confirm = 4;
+    TurnDone turn_done = 5;
+    Error error = 6;
+  }
+}
+
+message UserMessage {
+  string conversation_id = 1;
+  string text = 2;
+  MessageSource source = 3;
+}
+
+enum MessageSource {
+  MESSAGE_SOURCE_UNSPECIFIED = 0;
+  MESSAGE_SOURCE_TEXT = 1;
+  MESSAGE_SOURCE_VOICE = 2;
+  MESSAGE_SOURCE_TERMINAL = 3;
+  MESSAGE_SOURCE_PEER = 4;
+}
+
+message ConfirmResponse {
+  string request_id = 1;
+  ConfirmDecision decision = 2;
+}
+
+enum ConfirmDecision {
+  CONFIRM_DECISION_UNSPECIFIED = 0;
+  CONFIRM_DECISION_ALLOW_ONCE = 1;
+  CONFIRM_DECISION_ALLOW_ALWAYS = 2;
+  CONFIRM_DECISION_DENY = 3;
+}
+
+message CancelTurn {
+  string conversation_id = 1;
+}
+
+message TextDelta {
+  string text = 1;
+}
+
+message ToolCallStart {
+  string call_id = 1;
+  string tool = 2;
+  string arguments_json = 3;
+  Risk risk = 4;
+}
+
+message ToolCallEnd {
+  string call_id = 1;
+  ToolStatus status = 2;
+  string result_json = 3;
+}
+
+enum ToolStatus {
+  TOOL_STATUS_UNSPECIFIED = 0;
+  TOOL_STATUS_SUCCEEDED = 1;
+  TOOL_STATUS_DENIED = 2;
+  TOOL_STATUS_FAILED = 3;
+  TOOL_STATUS_CANCELLED = 4;
+}
+
+message ConfirmRequest {
+  string request_id = 1;
+  string call_id = 2;
+  string title = 3;
+  string detail = 4;
+  Risk risk = 5;
+  bool allow_always_available = 6;
+}
+
+enum Risk {
+  RISK_UNSPECIFIED = 0;
+  RISK_LOW = 1;
+  RISK_MEDIUM = 2;
+  RISK_HIGH = 3;
+}
+
+message TurnDone {
+  string conversation_id = 1;
+  string turn_id = 2;
+}
+
+message Error {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message DeviceProfile {
+  string agent_name = 1;
+  string device_name = 2;
+  FormFactor form_factor = 3;
+  string os_version = 4;
+  string locale = 5;
+  string timezone = 6;
+}
+
+enum FormFactor {
+  FORM_FACTOR_UNSPECIFIED = 0;
+  FORM_FACTOR_PHONE = 1;
+  FORM_FACTOR_DESKTOP = 2;
+  FORM_FACTOR_TV = 3;
+}
+
+message ProviderList {
+  repeated Provider providers = 1;
+  string selected_provider_id = 2;
+}
+
+message Provider {
+  string id = 1;
+  string display_name = 2;
+  bool connected = 3;
+  AuthKind auth_kind = 4;
+}
+
+enum AuthKind {
+  AUTH_KIND_UNSPECIFIED = 0;
+  AUTH_KIND_API_KEY = 1;
+  AUTH_KIND_OAUTH_DEVICE_CODE = 2;
+  AUTH_KIND_LOCAL = 3;
+}
+
+message ConnectRequest {
+  string provider_id = 1;
+  oneof credential {
+    string api_key = 2;
+    bool begin_device_code = 3;
+  }
+}
+
+message ConnectProgress {
+  ConnectState state = 1;
+  string message = 2;
+  string verification_url = 3;
+  string user_code = 4;
+}
+
+enum ConnectState {
+  CONNECT_STATE_UNSPECIFIED = 0;
+  CONNECT_STATE_WAITING_FOR_USER = 1;
+  CONNECT_STATE_VALIDATING = 2;
+  CONNECT_STATE_CONNECTED = 3;
+  CONNECT_STATE_FAILED = 4;
+}
+
+message ProviderId {
+  string id = 1;
+}
+
+message Model {
+  string id = 1;
+  string display_name = 2;
+}
+
+message ModelList {
+  repeated Model models = 1;
+  string selected_model_id = 2;
+}
+
+message SelectModelRequest {
+  string provider_id = 1;
+  string model_id = 2;
+}
+
+message AuditQuery {
+  google.protobuf.Timestamp after = 1;
+  uint32 limit = 2;
+}
+
+message AuditEntry {
+  google.protobuf.Timestamp timestamp = 1;
+  string turn_id = 2;
+  string tool = 3;
+  string arguments_json = 4;
+  string decision = 5;
+  string outcome_json = 6;
+}
+
+message OnboardConfig {
+  string display_name = 1;
+  string username = 2;
+  string password = 3;
+  string agent_name = 4;
+  string device_name = 5;
+  FormFactor form_factor = 6;
+  string locale = 7;
+  string timezone = 8;
+}

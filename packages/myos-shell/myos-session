@@ -1,0 +1,8 @@
+#!/bin/sh
+# Session entrypoint launched by cage (which is launched by greetd).
+export XDG_SESSION_TYPE=wayland
+export GDK_BACKEND=wayland
+if [ -f /etc/myos/onboarded ] || [ -f /etc/myos/live ]; then
+    exec myos-shell
+fi
+exec myos-shell --onboarding

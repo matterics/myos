@@ -1,0 +1,26 @@
+pkgname=myos-settings
+pkgver=0.0.1
+pkgrel=1
+pkgdesc='Base identity and configuration for MyOS'
+arch=('any')
+url='https://myos.dev'
+license=('MIT')
+source=(
+  'os-release'
+  'myos.conf'
+  'myos-live-selftest.service'
+  'myos-live-selftest'
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -Dm644 "$srcdir/os-release" "$pkgdir/usr/lib/myos/os-release"
+  install -Dm644 "$srcdir/myos.conf" "$pkgdir/usr/lib/tmpfiles.d/myos.conf"
+  install -Dm644 "$srcdir/myos-live-selftest.service" \
+    "$pkgdir/usr/lib/systemd/system/myos-live-selftest.service"
+  install -Dm755 "$srcdir/myos-live-selftest" \
+    "$pkgdir/usr/bin/myos-live-selftest"
+  install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+  ln -s ../myos-live-selftest.service \
+    "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/myos-live-selftest.service"
+}

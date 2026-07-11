@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+test -f /etc/myos/live
+grep -q '^NAME="MyOS"' /usr/lib/myos/os-release
+echo 'MYOS-M0-BOOT-OK' >/dev/ttyS0
+
+# M1: the agent daemon answers on its socket and the graphical session is up.
+for _ in $(seq 1 60); do
+  [[ -S /run/myos/agent.sock ]] && break
+  sleep 1
+done
+test -S /run/myos/agent.sock
+
+for _ in $(seq 1 60); do
+  systemctl is-active --quiet greetd && break
+  sleep 1
+done
+systemctl is-active --quiet greetd
+
+echo 'MYOS-M1-BOOT-OK' >/dev/ttyS0

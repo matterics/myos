@@ -1,0 +1,13 @@
+/out/
+/.cache/
+/work/
+/daemon/target/
+*.iso
+*.qcow2
+*.vmdk
+*.vmx
+/shell/build/
+/shell/.dart_tool/
+/shell/lib/gen/
+/shell/.flutter-plugins*
+/shell/pubspec.lock

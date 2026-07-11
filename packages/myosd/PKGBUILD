@@ -1,0 +1,23 @@
+pkgname=myosd
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='MyOS agent daemon — gRPC brain of the AI-native shell'
+arch=('x86_64')
+url='https://myos.dev'
+license=('MIT')
+depends=('gcc-libs')
+options=('!debug')
+source=(
+  'myosd'
+  'myosd.service'
+)
+sha256sums=('SKIP' 'SKIP')
+
+package() {
+  install -Dm755 "$srcdir/myosd" "$pkgdir/usr/bin/myosd"
+  install -Dm644 "$srcdir/myosd.service" \
+    "$pkgdir/usr/lib/systemd/system/myosd.service"
+  install -d "$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+  ln -s ../myosd.service \
+    "$pkgdir/usr/lib/systemd/system/multi-user.target.wants/myosd.service"
+}

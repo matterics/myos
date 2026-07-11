@@ -1,0 +1,9 @@
+# MyOS graphical session: greetd boots straight into the shell.
+# Live image runs as root (like archiso itself); the installer (M3)
+# switches this to the created user.
+[terminal]
+vt = 1
+
+[default_session]
+command = "cage -ds -- myos-session"
+user = "root"

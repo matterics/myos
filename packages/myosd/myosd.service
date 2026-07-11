@@ -1,0 +1,13 @@
+[Unit]
+Description=MyOS agent daemon
+Documentation=https://myos.dev/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/myosd
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
