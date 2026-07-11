@@ -179,8 +179,8 @@ pub async fn validate_key(provider: &str, api_key: &str) -> Result<()> {
             {
                 Ok(out) if out.status.success() => Ok(()),
                 _ => bail!(
-                    "The OpenCode CLI is not installed. Open the terminal (Ctrl+Shift+T) and run \
-                     `npm install -g opencode-ai`, then run `opencode auth login`."
+                    "The OpenCode CLI is missing from this image. Rebuild the MyOS ISO; runtime \
+                     npm installation is disabled because the live filesystem is space-limited."
                 ),
             };
         }
@@ -304,7 +304,9 @@ async fn opencode_chat(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("Failed to start the OpenCode CLI. It ships with MyOS; if missing, run `npm install -g opencode-ai`.")?;
+        .context(
+            "Failed to start the OpenCode CLI. This image is incomplete; rebuild the MyOS ISO.",
+        )?;
 
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();

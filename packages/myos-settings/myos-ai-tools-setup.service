@@ -1,17 +1,11 @@
 [Unit]
-Description=MyOS AI Tools Setup (opencode, pxpipe, headroom, ponytail)
-After=network-online.target
-Wants=network-online.target
+Description=Verify MyOS bundled AI runtime
 
 [Service]
 Type=oneshot
-Environment="PIPX_BIN_DIR=/usr/local/bin"
-Environment="PIPX_HOME=/opt/pipx"
-Environment="HOME=/root"
-# OpenCode is baked into the ISO at build time; this is a self-heal fallback.
-ExecStartPre=/usr/bin/bash -c 'command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai'
-ExecStartPre=/usr/bin/bash -c 'test -d /usr/lib/node_modules/pxpipe-proxy || npm install -g pxpipe-proxy @dietrichgebert/ponytail'
-ExecStart=/usr/bin/bash -c 'command -v headroom >/dev/null 2>&1 || pipx install "headroom-ai[all]"'
+# OpenCode is verified and baked into the immutable ISO. Never try to install
+# it into the small live overlay at boot.
+ExecStart=/usr/bin/opencode --version
 RemainAfterExit=yes
 
 [Install]

@@ -9,10 +9,20 @@ profile="$(bash "$root/scripts/prepare-archiso-profile.sh")"
 # Install ollama in the build container so we can manage models
 pacman -S --noconfirm --needed ollama nodejs npm
 
-# Bake the OpenCode CLI into the ISO rootfs so it works on first boot,
-# no network needed. The boot-time service only self-heals if it's missing.
+# Bake OpenCode into the ISO without running npm's postinstall on the
+# Windows-backed profile mount (hardlink replacement is unreliable there).
 echo "Installing OpenCode CLI into ISO rootfs..."
-npm install -g --prefix "$profile/airootfs/usr" opencode-ai
+opencode_stage="$(mktemp -d)"
+trap 'rm -rf "$opencode_stage"' EXIT
+npm install --prefix "$opencode_stage" --ignore-scripts --no-audit --no-fund opencode-ai
+# Use the baseline build so the ISO also boots on x86_64 CPUs without AVX2.
+opencode_bin="$opencode_stage/node_modules/opencode-linux-x64-baseline/bin/opencode"
+file "$opencode_bin" | grep -q 'ELF 64-bit' || {
+    echo "OpenCode package did not produce a Linux executable" >&2
+    exit 1
+}
+"$opencode_bin" --version
+install -Dm755 "$opencode_bin" "$profile/airootfs/usr/bin/opencode"
 
 # Only this model is bundled into the ISO.
 MODEL_NAME="${MYOS_LOCAL_MODEL:-gemma:2b}"
