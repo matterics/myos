@@ -28,6 +28,8 @@ Read in order. These docs are written to be handed to an AI coding agent (or a h
 | [docs/03-OS-CREATION.md](docs/03-OS-CREATION.md) | Building the distro itself: kernel config, userspace, the Flutter shell, agent daemon (`myosd`), provider connectors, voice pipeline, onboarding, terminal, permissions |
 | [docs/04-ISO-BUILD-AND-SHIP.md](docs/04-ISO-BUILD-AND-SHIP.md) | archiso profile, installer, testing in QEMU/VMware, USB flashing, signing, versioning, OTA updates, CI/CD release pipeline |
 | [docs/05-DEVELOPMENT.md](docs/05-DEVELOPMENT.md) | Current implementation status, Windows build setup, and M0 boot acceptance testing |
+| [docs/06-LOOPS.md](docs/06-LOOPS.md) | Loop-first projects, autonomy levels, scheduling, and run history |
+| [docs/07-AGENT-KERNEL.md](docs/07-AGENT-KERNEL.md) | OpenCode-first runtime, shared context, permissions, AIOS/Hermes integration boundary |
 
 ## Quick start
 

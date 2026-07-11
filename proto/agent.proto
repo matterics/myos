@@ -17,6 +17,11 @@ service Agent {
   rpc GetAuditLog(AuditQuery) returns (stream AuditEntry);
   rpc Onboard(OnboardConfig) returns (google.protobuf.Empty);
   rpc GetChatHistory(google.protobuf.Empty) returns (ChatHistoryList);
+  rpc GetChatSession(ChatSessionId) returns (ChatTranscript);
+  rpc DeleteChatSession(ChatSessionId) returns (google.protobuf.Empty);
+  rpc GetRuntimeStatus(ChatSessionId) returns (RuntimeStatus);
+  rpc SetPermissionMode(SetPermissionModeRequest) returns (RuntimeStatus);
+  rpc ListProviderCommands(ProviderId) returns (ProviderCommandList);
 
   // Loop engineering: loops are the first-class unit of work. A loop runs on a
   // cadence toward a goal; projects are created and advanced by loops, never
@@ -111,6 +116,21 @@ message ChatSession {
   string id = 1;
   string preview = 2;
   google.protobuf.Timestamp last_updated = 3;
+  uint32 message_count = 4;
+}
+
+message ChatSessionId {
+  string id = 1;
+}
+
+message ChatMessage {
+  string role = 1;
+  string text = 2;
+}
+
+message ChatTranscript {
+  ChatSession session = 1;
+  repeated ChatMessage messages = 2;
 }
 
 message ClientEvent {
@@ -136,6 +156,39 @@ message UserMessage {
   string conversation_id = 1;
   string text = 2;
   MessageSource source = 3;
+  bool optimize_prompt = 4;
+}
+
+enum PermissionMode {
+  PERMISSION_MODE_UNSPECIFIED = 0;
+  PERMISSION_MODE_ASK = 1;
+  PERMISSION_MODE_AUTO_SESSION = 2;
+  PERMISSION_MODE_FULL_ACCESS = 3;
+}
+
+message SetPermissionModeRequest {
+  PermissionMode mode = 1;
+  string conversation_id = 2;
+}
+
+message RuntimeStatus {
+  string provider_id = 1;
+  string model_id = 2;
+  bool model_available = 3;
+  string model_status = 4;
+  uint64 context_used_tokens = 5;
+  uint64 context_window_tokens = 6;
+  PermissionMode permission_mode = 7;
+}
+
+message ProviderCommand {
+  string name = 1;
+  string description = 2;
+  string provider_id = 3;
+}
+
+message ProviderCommandList {
+  repeated ProviderCommand commands = 1;
 }
 
 enum MessageSource {

@@ -1,0 +1,19 @@
+{
+  "policies": {
+    "DisableFirefoxStudies": true,
+    "DisablePocket": true,
+    "DisableTelemetry": true,
+    "DontCheckDefaultBrowser": true,
+    "EnableTrackingProtection": {
+      "Value": true,
+      "Cryptomining": true,
+      "Fingerprinting": true,
+      "Locked": true
+    },
+    "FirefoxHome": {
+      "SponsoredPocket": false,
+      "SponsoredTopSites": false
+    },
+    "OfferToSaveLogins": false
+  }
+}

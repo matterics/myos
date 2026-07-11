@@ -11,7 +11,8 @@ export '../gen/agent.pbgrpc.dart';
 
 /// A single chat message rendered by the UI.
 class ChatMessage {
-  ChatMessage(this.role, this.text, {this.streaming = false, this.isError = false});
+  ChatMessage(this.role, this.text,
+      {this.streaming = false, this.isError = false});
   final String role; // "user" | "assistant"
   String text;
   bool streaming;
@@ -40,10 +41,15 @@ class AgentIpc extends ChangeNotifier {
   ModelList? models;
   LoopList? loops;
   ProjectList? projects;
-  
+  RuntimeStatus? runtimeStatus;
+  ProviderCommandList? providerCommands;
+  ConfirmRequest? pendingConfirmation;
+  bool promptOptimizer = true;
+
   String currentConversationId = 'default';
 
-  String get agentName => profile?.agentName.isNotEmpty == true ? profile!.agentName : 'MyOS';
+  String get agentName =>
+      profile?.agentName.isNotEmpty == true ? profile!.agentName : 'MyOS';
 
   Provider? get selectedProvider {
     final p = providers;
@@ -102,6 +108,12 @@ class AgentIpc extends ChangeNotifier {
       models = selected.isEmpty
           ? null
           : await _stub.listModels(ProviderId(id: selected));
+      runtimeStatus = await _stub.getRuntimeStatus(
+        ChatSessionId(id: currentConversationId),
+      );
+      providerCommands = selected.isEmpty
+          ? null
+          : await _stub.listProviderCommands(ProviderId(id: selected));
       loops = await _stub.listLoops(Empty());
       projects = await _stub.listProjects(Empty());
     } on Object {
@@ -172,6 +184,10 @@ class AgentIpc extends ChangeNotifier {
       case ServerEvent_Event.turnDone:
         if (messages.isNotEmpty) messages.last.streaming = false;
         busy = false;
+        unawaited(refresh());
+        break;
+      case ServerEvent_Event.confirm:
+        pendingConfirmation = ev.confirm;
         break;
       default:
         break;
@@ -185,6 +201,14 @@ class AgentIpc extends ChangeNotifier {
 
     if (trimmed == '/new') {
       clearChat();
+      return;
+    }
+
+    if (trimmed == '/optimize') {
+      promptOptimizer = !promptOptimizer;
+      messages.add(ChatMessage('assistant',
+          'Prompt optimizer ${promptOptimizer ? 'enabled' : 'disabled'} for this session.'));
+      notifyListeners();
       return;
     }
 
@@ -206,7 +230,8 @@ class AgentIpc extends ChangeNotifier {
         }
         messages.add(ChatMessage('assistant', sb.toString()));
       } catch (e) {
-        messages.add(ChatMessage('assistant', 'Failed to fetch history: $e', isError: true));
+        messages.add(ChatMessage('assistant', 'Failed to fetch history: $e',
+            isError: true));
       }
       busy = false;
       notifyListeners();
@@ -217,7 +242,8 @@ class AgentIpc extends ChangeNotifier {
       final targetId = trimmed.substring(6).trim();
       currentConversationId = targetId;
       messages.clear();
-      messages.add(ChatMessage('assistant', 'Switched to conversation `$targetId`.\n\nThe AI now remembers this context, but past messages are hidden from the UI to save screen space.'));
+      messages.add(ChatMessage('assistant',
+          'Switched to conversation `$targetId`.\n\nThe AI now remembers this context, but past messages are hidden from the UI to save screen space.'));
       _openChatStream();
       notifyListeners();
       return;
@@ -231,6 +257,7 @@ class AgentIpc extends ChangeNotifier {
         conversationId: currentConversationId,
         text: trimmed,
         source: MessageSource.MESSAGE_SOURCE_TEXT,
+        optimizePrompt: promptOptimizer,
       ),
     ));
   }
@@ -245,6 +272,42 @@ class AgentIpc extends ChangeNotifier {
     currentConversationId = DateTime.now().toIso8601String();
     messages.clear();
     _openChatStream();
+    notifyListeners();
+  }
+
+  Future<ChatHistoryList> chatHistory() => _stub.getChatHistory(Empty());
+
+  Future<void> loadChat(String id) async {
+    final transcript = await _stub.getChatSession(ChatSessionId(id: id));
+    currentConversationId = id;
+    messages
+      ..clear()
+      ..addAll(transcript.messages.map((m) => ChatMessage(m.role, m.text)));
+    _openChatStream();
+    await refresh();
+  }
+
+  Future<void> deleteChat(String id) async {
+    await _stub.deleteChatSession(ChatSessionId(id: id));
+    if (id == currentConversationId) clearChat();
+  }
+
+  Future<void> setPermissionMode(PermissionMode mode) async {
+    runtimeStatus = await _stub.setPermissionMode(SetPermissionModeRequest(
+      mode: mode,
+      conversationId: currentConversationId,
+    ));
+    notifyListeners();
+  }
+
+  void answerConfirmation(ConfirmDecision decision) {
+    final request = pendingConfirmation;
+    if (request == null || _outgoing == null) return;
+    _outgoing!.add(ClientEvent(
+      confirm:
+          ConfirmResponse(requestId: request.requestId, decision: decision),
+    ));
+    pendingConfirmation = null;
     notifyListeners();
   }
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../ipc/agent_client.dart';
 import '../main.dart';
+import 'terminal_screen.dart';
 
 void showProviderSheet(BuildContext context, AgentIpc ipc) {
   showModalBottomSheet(
@@ -53,11 +54,24 @@ class _ProviderSheetState extends State<_ProviderSheet> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Connect a provider, then pick which one answers you.',
+              'OpenCode is the default runtime. Add model providers through its OAuth-capable login, or use a direct adapter below.',
               style: TextStyle(
                 fontSize: 13,
                 color: Colors.white.withValues(alpha: 0.5),
               ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const TerminalScreen(
+                    initialCommand: 'opencode auth login',
+                  ),
+                ));
+              },
+              icon: const Icon(Icons.open_in_browser),
+              label: const Text('Connect with OpenCode OAuth'),
             ),
             const SizedBox(height: 16),
             if (providers == null)
@@ -154,8 +168,12 @@ class _ProviderSheetState extends State<_ProviderSheet> {
                 obscureText: p.authKind != AuthKind.AUTH_KIND_LOCAL,
                 autofocus: true,
                 decoration: InputDecoration(
-                  labelText: p.authKind == AuthKind.AUTH_KIND_LOCAL ? 'Base URL' : 'API key',
-                  hintText: p.authKind == AuthKind.AUTH_KIND_LOCAL ? 'e.g. http://127.0.0.1:11434/v1' : 'Paste your API key',
+                  labelText: p.authKind == AuthKind.AUTH_KIND_LOCAL
+                      ? 'Base URL'
+                      : 'API key',
+                  hintText: p.authKind == AuthKind.AUTH_KIND_LOCAL
+                      ? 'e.g. http://127.0.0.1:11434/v1'
+                      : 'Paste your API key',
                   border: const OutlineInputBorder(),
                 ),
               ),

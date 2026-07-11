@@ -2,7 +2,8 @@ use crate::loops;
 use crate::pb;
 use crate::pb::agent_server::Agent;
 use crate::providers;
-use crate::state::{LoopDef, LoopRunRecord, ProjectDef, ProviderConfig, Store};
+use crate::state::{ChatMeta, LoopDef, LoopRunRecord, ProjectDef, ProviderConfig, Store};
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -11,11 +12,15 @@ use tonic::{Request, Response, Status, Streaming};
 
 pub struct AgentService {
     store: Arc<Store>,
+    session_auto: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl AgentService {
     pub fn new(store: Arc<Store>) -> Self {
-        Self { store }
+        Self {
+            store,
+            session_auto: Arc::new(std::sync::Mutex::new(HashSet::new())),
+        }
     }
 }
 
@@ -87,6 +92,62 @@ fn system_prompt() -> String {
         device = p.device_name,
         ver = p.os_version,
     )
+}
+
+fn optimize_prompt(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.starts_with('/') || trimmed.len() < 12 {
+        return trimmed.into();
+    }
+    format!(
+        "Goal: {trimmed}\n\nWork autonomously in a verify-and-correct loop. Preserve existing user work, use available tools and MCP servers, report blockers precisely, and finish with the outcome plus verification."
+    )
+}
+
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+async fn runtime_status(
+    store: &Store,
+    session_auto: &std::sync::Mutex<HashSet<String>>,
+    conversation_id: &str,
+) -> pb::RuntimeStatus {
+    let cfg = store.get();
+    let provider_id = cfg.selected_provider.clone().unwrap_or_default();
+    let pc = cfg.providers.get(&provider_id);
+    let model_id = pc.and_then(|p| p.model.clone()).unwrap_or_default();
+    let model_available = match pc {
+        Some(p) => providers::validate_key(&provider_id, &p.api_key)
+            .await
+            .is_ok(),
+        None => false,
+    };
+    let history = cfg
+        .history
+        .get(conversation_id)
+        .cloned()
+        .unwrap_or_default();
+    let permission_mode = if cfg.permission_mode == "full" {
+        pb::PermissionMode::FullAccess
+    } else if session_auto.lock().unwrap().contains(conversation_id) {
+        pb::PermissionMode::AutoSession
+    } else {
+        pb::PermissionMode::Ask
+    };
+    pb::RuntimeStatus {
+        provider_id,
+        model_id: model_id.clone(),
+        model_available,
+        model_status: if model_available {
+            "Ready".into()
+        } else {
+            "Runtime or authentication unavailable".into()
+        },
+        context_used_tokens: providers::estimate_tokens(&history),
+        context_window_tokens: providers::context_window(&model_id),
+        permission_mode: permission_mode as i32,
+    }
 }
 
 fn delta_event(text: String) -> pb::ServerEvent {
@@ -166,6 +227,33 @@ async fn run_host_command(cmd: &str) -> String {
     }
 }
 
+async fn run_provider_command(provider: &str, text: &str) -> Option<String> {
+    if provider != "opencode" {
+        return None;
+    }
+    let args: &[&str] = match text.trim() {
+        "/session" => &["session", "list", "--format", "json"],
+        "/models" => &["models"],
+        "/mcp" => &["mcp", "list"],
+        "/stats" => &["stats", "--models", "5"],
+        "/connect" => {
+            return Some(
+                "Open the terminal and run `opencode auth login`. OpenCode will offer OAuth where the provider supports it and open the browser for authentication.".into(),
+            );
+        }
+        _ => return None,
+    };
+    let output = tokio::process::Command::new("opencode")
+        .args(args)
+        .output()
+        .await;
+    Some(match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        Ok(out) => String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        Err(e) => format!("Could not run OpenCode: {e}"),
+    })
+}
+
 /// Cap on model→command→model round trips per user message.
 const MAX_AGENT_ITERATIONS: usize = 5;
 
@@ -234,6 +322,7 @@ impl Agent for AgentService {
         let mut inbound = request.into_inner();
         let (tx, rx) = mpsc::channel::<Result<pb::ServerEvent, Status>>(64);
         let store = self.store.clone();
+        let session_auto = self.session_auto.clone();
 
         tokio::spawn(async move {
             // Send history on connect if requested? Wait, there's no GetHistory API in proto.
@@ -248,6 +337,11 @@ impl Agent for AgentService {
                 } else {
                     msg.conversation_id.clone()
                 };
+                let text = if msg.optimize_prompt {
+                    optimize_prompt(&msg.text)
+                } else {
+                    msg.text.clone()
+                };
 
                 // Add user msg to persistent store history
                 let mut history = vec![];
@@ -255,6 +349,11 @@ impl Agent for AgentService {
                     let conv = cfg.history.entry(conv_id.clone()).or_default();
                     conv.push(("user".into(), msg.text.clone()));
                     history = conv.clone();
+                    if let Some((_, prompt)) = history.last_mut() {
+                        *prompt = text.clone();
+                    }
+                    cfg.history_meta
+                        .insert(conv_id.clone(), ChatMeta { updated_at: now() });
                 });
 
                 let cfg = store.get();
@@ -283,6 +382,18 @@ impl Agent for AgentService {
                         }
                     }
                     Some((id, pc)) => {
+                        if let Some(reply) = run_provider_command(&id, &text).await {
+                            let _ = store.update(|cfg| {
+                                if let Some(conv) = cfg.history.get_mut(&conv_id) {
+                                    conv.push(("assistant".into(), reply.clone()));
+                                }
+                                cfg.history_meta
+                                    .insert(conv_id.clone(), ChatMeta { updated_at: now() });
+                            });
+                            let _ = tx.send(Ok(delta_event(reply))).await;
+                            let _ = tx.send(Ok(turn_done(conv_id))).await;
+                            continue;
+                        }
                         let model =
                             match providers::effective_model(&id, &pc.api_key, pc.model.as_deref())
                                 .await
@@ -309,6 +420,8 @@ impl Agent for AgentService {
                                 }
                             };
                         let mut iterations = 0usize;
+                        let mut auto = cfg.permission_mode == "full"
+                            || session_auto.lock().unwrap().contains(&conv_id);
                         'agent: loop {
                             let mut deltas = providers::stream_chat(
                                 &id,
@@ -316,6 +429,7 @@ impl Agent for AgentService {
                                 &model,
                                 &system_prompt(),
                                 history.clone(),
+                                auto,
                             );
                             let mut full = String::new();
                             while let Some(item) = deltas.recv().await {
@@ -351,6 +465,41 @@ impl Agent for AgentService {
 
                             let mut results = String::from("[MyOS] Command results:\n");
                             for cmd in commands {
+                                if !auto {
+                                    let request_id = format!("{}-{}", conv_id, now());
+                                    let confirm = pb::ServerEvent {
+                                        event: Some(pb::server_event::Event::Confirm(
+                                            pb::ConfirmRequest {
+                                                request_id: request_id.clone(),
+                                                call_id: request_id.clone(),
+                                                title: "Allow command?".into(),
+                                                detail: cmd.clone(),
+                                                risk: pb::Risk::High as i32,
+                                                allow_always_available: true,
+                                            },
+                                        )),
+                                    };
+                                    if tx.send(Ok(confirm)).await.is_err() {
+                                        return;
+                                    }
+                                    let decision = loop {
+                                        match inbound.message().await {
+                                            Ok(Some(pb::ClientEvent {
+                                                event: Some(pb::client_event::Event::Confirm(c)),
+                                            })) if c.request_id == request_id => break c.decision,
+                                            Ok(Some(_)) => continue,
+                                            _ => return,
+                                        }
+                                    };
+                                    if decision == pb::ConfirmDecision::Deny as i32 {
+                                        results.push_str(&format!("$ {cmd}\n(denied by user)\n\n"));
+                                        continue;
+                                    }
+                                    if decision == pb::ConfirmDecision::AllowAlways as i32 {
+                                        session_auto.lock().unwrap().insert(conv_id.clone());
+                                        auto = true;
+                                    }
+                                }
                                 let _ = tx.send(Ok(delta_event(format!("\n\n⚙️ `{cmd}`\n")))).await;
                                 let output = run_host_command(&cmd).await;
                                 let _ = tx
@@ -396,6 +545,8 @@ impl Agent for AgentService {
                 connected: cfg.providers.contains_key(p.id),
                 auth_kind: if p.id == "local" {
                     pb::AuthKind::Local as i32
+                } else if p.id == "opencode" {
+                    pb::AuthKind::OauthDeviceCode as i32
                 } else {
                     pb::AuthKind::ApiKey as i32
                 },
@@ -613,12 +764,128 @@ impl Agent for AgentService {
             sessions.push(pb::ChatSession {
                 id: id.clone(),
                 preview,
-                last_updated: None, // Simplified timestamp
+                last_updated: cfg.history_meta.get(id).map(|m| prost_types::Timestamp {
+                    seconds: m.updated_at,
+                    nanos: 0,
+                }),
+                message_count: turns.len() as u32,
             });
         }
 
-        // Sort sessions so "default" or newer is at the top if possible, here just returning as-is
+        sessions
+            .sort_by_key(|s| std::cmp::Reverse(s.last_updated.as_ref().map_or(0, |t| t.seconds)));
         Ok(Response::new(pb::ChatHistoryList { sessions }))
+    }
+
+    async fn get_chat_session(
+        &self,
+        request: Request<pb::ChatSessionId>,
+    ) -> Result<Response<pb::ChatTranscript>, Status> {
+        let id = request.into_inner().id;
+        let cfg = self.store.get();
+        let turns = cfg
+            .history
+            .get(&id)
+            .ok_or_else(|| Status::not_found("chat session not found"))?;
+        let preview = turns
+            .iter()
+            .find(|(role, _)| role == "user")
+            .map(|(_, text)| text.clone())
+            .unwrap_or_else(|| "Empty chat".into());
+        Ok(Response::new(pb::ChatTranscript {
+            session: Some(pb::ChatSession {
+                id: id.clone(),
+                preview,
+                last_updated: cfg.history_meta.get(&id).map(|m| prost_types::Timestamp {
+                    seconds: m.updated_at,
+                    nanos: 0,
+                }),
+                message_count: turns.len() as u32,
+            }),
+            messages: turns
+                .iter()
+                .map(|(role, text)| pb::ChatMessage {
+                    role: role.clone(),
+                    text: text.clone(),
+                })
+                .collect(),
+        }))
+    }
+
+    async fn delete_chat_session(
+        &self,
+        request: Request<pb::ChatSessionId>,
+    ) -> Result<Response<()>, Status> {
+        let id = request.into_inner().id;
+        self.store
+            .update(|cfg| {
+                cfg.history.remove(&id);
+                cfg.history_meta.remove(&id);
+            })
+            .map_err(|e| Status::internal(e.to_string()))?;
+        self.session_auto.lock().unwrap().remove(&id);
+        Ok(Response::new(()))
+    }
+
+    async fn get_runtime_status(
+        &self,
+        request: Request<pb::ChatSessionId>,
+    ) -> Result<Response<pb::RuntimeStatus>, Status> {
+        Ok(Response::new(
+            runtime_status(&self.store, &self.session_auto, &request.into_inner().id).await,
+        ))
+    }
+
+    async fn set_permission_mode(
+        &self,
+        request: Request<pb::SetPermissionModeRequest>,
+    ) -> Result<Response<pb::RuntimeStatus>, Status> {
+        let req = request.into_inner();
+        match pb::PermissionMode::try_from(req.mode).unwrap_or(pb::PermissionMode::Ask) {
+            pb::PermissionMode::AutoSession => {
+                self.session_auto
+                    .lock()
+                    .unwrap()
+                    .insert(req.conversation_id.clone());
+                self.store
+                    .update(|cfg| cfg.permission_mode = "ask".into())
+                    .map_err(|e| Status::internal(e.to_string()))?;
+            }
+            pb::PermissionMode::FullAccess => {
+                self.store
+                    .update(|cfg| cfg.permission_mode = "full".into())
+                    .map_err(|e| Status::internal(e.to_string()))?;
+            }
+            _ => {
+                self.session_auto
+                    .lock()
+                    .unwrap()
+                    .remove(&req.conversation_id);
+                self.store
+                    .update(|cfg| cfg.permission_mode = "ask".into())
+                    .map_err(|e| Status::internal(e.to_string()))?;
+            }
+        }
+        Ok(Response::new(
+            runtime_status(&self.store, &self.session_auto, &req.conversation_id).await,
+        ))
+    }
+
+    async fn list_provider_commands(
+        &self,
+        request: Request<pb::ProviderId>,
+    ) -> Result<Response<pb::ProviderCommandList>, Status> {
+        let provider_id = request.into_inner().id;
+        Ok(Response::new(pb::ProviderCommandList {
+            commands: providers::commands(&provider_id)
+                .into_iter()
+                .map(|(name, description)| pb::ProviderCommand {
+                    name: name.into(),
+                    description: description.into(),
+                    provider_id: provider_id.clone(),
+                })
+                .collect(),
+        }))
     }
 
     async fn create_loop(

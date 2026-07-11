@@ -33,7 +33,7 @@ plymouth mkinitcpio open-vm-tools qemu-guest-agent
 + all myos-* packages
 ```
 
-No display manager UI, no desktop environment, no browser (v1). `foot` = fallback terminal for recovery only; the real terminal is inside the shell.
+No display manager UI or desktop environment. A policy-hardened Firefox build is included for OAuth and explicit web flows; the real terminal remains inside the shell.
 
 ---
 

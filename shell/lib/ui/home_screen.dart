@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../ipc/agent_client.dart';
 import '../main.dart';
 import 'loops_sheet.dart';
+import 'history_page.dart';
 import 'provider_sheet.dart';
 import 'terminal_screen.dart';
 
@@ -23,6 +24,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final _inputFocus = FocusNode();
   final _scroll = ScrollController();
   bool _terminalOpen = false;
+  bool _confirmationShowing = false;
+  String _draft = '';
 
   AgentIpc get ipc => widget.ipc;
 
@@ -48,12 +51,50 @@ class _HomeScreenState extends State<HomeScreen> {
           curve: Curves.easeOut,
         );
       }
+      if (ipc.pendingConfirmation != null && !_confirmationShowing) {
+        _showConfirmation();
+      }
     });
+  }
+
+  Future<void> _showConfirmation() async {
+    final request = ipc.pendingConfirmation;
+    if (request == null) return;
+    _confirmationShowing = true;
+    final decision = await showDialog<ConfirmDecision>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: myosSurface,
+        title: Text(request.title),
+        content: SelectableText(request.detail),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(context, ConfirmDecision.CONFIRM_DECISION_DENY),
+            child: const Text('Deny'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(
+                context, ConfirmDecision.CONFIRM_DECISION_ALLOW_ALWAYS),
+            child: const Text('Auto accept this session'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(
+                context, ConfirmDecision.CONFIRM_DECISION_ALLOW_ONCE),
+            child: const Text('Allow once'),
+          ),
+        ],
+      ),
+    );
+    _confirmationShowing = false;
+    ipc.answerConfirmation(decision ?? ConfirmDecision.CONFIRM_DECISION_DENY);
   }
 
   void _send() {
     ipc.send(_input.text);
     _input.clear();
+    _draft = '';
     _inputFocus.requestFocus();
   }
 
@@ -74,8 +115,8 @@ class _HomeScreenState extends State<HomeScreen> {
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyT,
             control: true, shift: true): _toggleTerminal,
-        const SingleActivator(LogicalKeyboardKey.keyT,
-            meta: true, shift: true): _toggleTerminal,
+        const SingleActivator(LogicalKeyboardKey.keyT, meta: true, shift: true):
+            _toggleTerminal,
       },
       child: Focus(
         autofocus: true,
@@ -85,7 +126,11 @@ class _HomeScreenState extends State<HomeScreen> {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFF0B0E14), Color(0xFF121026), Color(0xFF0B0E14)],
+                colors: [
+                  Color(0xFF0B0E14),
+                  Color(0xFF121026),
+                  Color(0xFF0B0E14)
+                ],
               ),
             ),
             child: SafeArea(
@@ -124,8 +169,9 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          Wrap(
+            alignment: WrapAlignment.center,
+            runSpacing: 8,
             children: [
               _Chip(
                 icon: Icons.bolt,
@@ -153,16 +199,38 @@ class _HomeScreenState extends State<HomeScreen> {
                     : 'Loops (${ipc.loops!.loops.length})',
                 onTap: () => showLoopsSheet(context, ipc),
               ),
+              const SizedBox(width: 8),
+              _Chip(
+                icon: Icons.history,
+                label: 'History',
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => HistoryPage(ipc: ipc),
+                )),
+              ),
+              const SizedBox(width: 8),
+              _permissionChip(),
+              const SizedBox(width: 8),
+              _Chip(
+                icon: Icons.auto_fix_high,
+                label: ipc.promptOptimizer ? 'Optimize on' : 'Optimize off',
+                highlighted: ipc.promptOptimizer,
+                onTap: () => ipc.send('/optimize'),
+              ),
             ],
           ),
           const SizedBox(height: 8),
+          if (_draft.startsWith('/') && ipc.providerCommands != null)
+            _commandSuggestions(),
           Container(
             decoration: BoxDecoration(
               color: myosSurface,
               borderRadius: BorderRadius.circular(28),
               border: Border.all(color: Colors.white12),
               boxShadow: const [
-                BoxShadow(color: Colors.black45, blurRadius: 24, offset: Offset(0, 8)),
+                BoxShadow(
+                    color: Colors.black45,
+                    blurRadius: 24,
+                    offset: Offset(0, 8)),
               ],
             ),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -179,6 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     controller: _input,
                     focusNode: _inputFocus,
                     autofocus: true,
+                    onChanged: (value) => setState(() => _draft = value),
                     onSubmitted: (_) => _send(),
                     style: const TextStyle(fontSize: 16),
                     decoration: InputDecoration(
@@ -209,7 +278,8 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 6),
           Text(
             'Ctrl+Shift+T — terminal',
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.25), fontSize: 11),
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25), fontSize: 11),
           ),
         ],
       ),
@@ -248,6 +318,67 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  Widget _permissionChip() {
+    final mode = ipc.runtimeStatus?.permissionMode;
+    final label = mode == PermissionMode.PERMISSION_MODE_FULL_ACCESS
+        ? 'Full access'
+        : mode == PermissionMode.PERMISSION_MODE_AUTO_SESSION
+            ? 'Auto this session'
+            : 'Ask approval';
+    return PopupMenuButton<PermissionMode>(
+      tooltip: 'Agent access',
+      color: myosSurface,
+      onSelected: ipc.setPermissionMode,
+      itemBuilder: (_) => const [
+        PopupMenuItem(
+          value: PermissionMode.PERMISSION_MODE_ASK,
+          child: Text('Ask for approval'),
+        ),
+        PopupMenuItem(
+          value: PermissionMode.PERMISSION_MODE_AUTO_SESSION,
+          child: Text('Auto accept this session'),
+        ),
+        PopupMenuItem(
+          value: PermissionMode.PERMISSION_MODE_FULL_ACCESS,
+          child: Text('Full access'),
+        ),
+      ],
+      child: _Chip(icon: Icons.shield_outlined, label: label),
+    );
+  }
+
+  Widget _commandSuggestions() {
+    final commands = ipc.providerCommands!.commands
+        .where((command) => command.name.startsWith(_draft))
+        .take(6);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: myosSurface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          for (final command in commands)
+            ActionChip(
+              label: Text('${command.name} — ${command.description}'),
+              onPressed: () {
+                _input.text = command.name;
+                _input.selection = TextSelection.collapsed(
+                  offset: _input.text.length,
+                );
+                setState(() => _draft = command.name);
+              },
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _Chip extends StatelessWidget {
@@ -272,7 +403,8 @@ class _Chip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: highlighted ? myosAccent.withValues(alpha: 0.25) : Colors.white10,
+          color:
+              highlighted ? myosAccent.withValues(alpha: 0.25) : Colors.white10,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
               color: highlighted ? myosAccent : Colors.white12, width: 1),
@@ -280,7 +412,8 @@ class _Chip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: highlighted ? myosAccent : Colors.white70),
+            Icon(icon,
+                size: 14, color: highlighted ? myosAccent : Colors.white70),
             const SizedBox(width: 6),
             Text(label,
                 style: const TextStyle(fontSize: 12, color: Colors.white70)),
@@ -340,13 +473,34 @@ class _StatusBarState extends State<_StatusBar> {
             height: 7,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: widget.ipc.daemonUp ? Colors.greenAccent : Colors.redAccent,
+              color:
+                  widget.ipc.daemonUp ? Colors.greenAccent : Colors.redAccent,
             ),
           ),
+          if (widget.ipc.runtimeStatus != null) ...[
+            const SizedBox(width: 12),
+            Icon(
+              Icons.memory,
+              size: 14,
+              color: widget.ipc.runtimeStatus!.modelAvailable
+                  ? Colors.greenAccent
+                  : Colors.orangeAccent,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '${(widget.ipc.runtimeStatus!.contextUsedTokens.toDouble() / 1000).toStringAsFixed(1)}k / '
+              '${(widget.ipc.runtimeStatus!.contextWindowTokens.toDouble() / 1000).toStringAsFixed(0)}k context',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.55),
+                fontSize: 12,
+              ),
+            ),
+          ],
           const Spacer(),
           Text(
             DateFormat('EEE d MMM  HH:mm').format(now),
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13),
+            style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.6), fontSize: 13),
           ),
         ],
       ),

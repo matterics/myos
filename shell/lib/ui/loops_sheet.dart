@@ -96,7 +96,8 @@ class _LoopsSheetState extends State<_LoopsSheet> {
                         : ListView(
                             shrinkWrap: true,
                             children: [
-                              for (final l in loops.loops) _loopTile(context, l),
+                              for (final l in loops.loops)
+                                _loopTile(context, l),
                             ],
                           ),
               ),
@@ -418,8 +419,8 @@ class _LoopsSheetState extends State<_LoopsSheet> {
                   const SizedBox(height: 12),
                   Text(
                     status!,
-                    style: const TextStyle(
-                        fontSize: 13, color: Colors.redAccent),
+                    style:
+                        const TextStyle(fontSize: 13, color: Colors.redAccent),
                   ),
                 ],
               ],

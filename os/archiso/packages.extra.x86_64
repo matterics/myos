@@ -1,5 +1,6 @@
 amd-ucode
 cage
+firefox
 greetd
 gtk3
 intel-ucode
@@ -18,4 +19,5 @@ python-pip
 python-pipx
 qemu-guest-agent
 ttf-jetbrains-mono
+xdg-utils
 xorg-xwayland

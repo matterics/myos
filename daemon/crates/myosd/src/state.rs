@@ -11,6 +11,11 @@ pub struct ProviderConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMeta {
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopDef {
     pub id: String,
     pub name: String,
@@ -55,6 +60,10 @@ pub struct Config {
     #[serde(default)]
     pub history: HashMap<String, Vec<(String, String)>>,
     #[serde(default)]
+    pub history_meta: HashMap<String, ChatMeta>,
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: String,
+    #[serde(default)]
     pub loops: HashMap<String, LoopDef>,
     #[serde(default)]
     pub loop_runs: HashMap<String, Vec<LoopRunRecord>>,
@@ -66,21 +75,27 @@ impl Default for Config {
     fn default() -> Self {
         let mut providers = HashMap::new();
         providers.insert(
-            "local".to_string(),
+            "opencode".to_string(),
             ProviderConfig {
-                api_key: "http://127.0.0.1:11434/v1".to_string(),
-                model: Some("gemma:2b".to_string()),
+                api_key: String::new(),
+                model: None,
             },
         );
         Self {
-            selected_provider: Some("local".to_string()),
+            selected_provider: Some("opencode".to_string()),
             providers,
             history: HashMap::new(),
+            history_meta: HashMap::new(),
+            permission_mode: default_permission_mode(),
             loops: HashMap::new(),
             loop_runs: HashMap::new(),
             projects: HashMap::new(),
         }
     }
+}
+
+fn default_permission_mode() -> String {
+    "ask".into()
 }
 
 pub struct Store {
@@ -91,13 +106,31 @@ pub struct Store {
 impl Store {
     pub fn load() -> Result<Self> {
         let path = state_dir().join("providers.toml");
-        let config = match std::fs::read_to_string(&path) {
+        let mut config = match std::fs::read_to_string(&path) {
             Ok(text) => {
                 toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config::default(),
             Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
         };
+        // Migrate the original untouched Gemma seed to the OpenCode-first runtime.
+        if config.selected_provider.as_deref() == Some("local")
+            && config.providers.len() == 1
+            && config
+                .providers
+                .get("local")
+                .and_then(|p| p.model.as_deref())
+                == Some("gemma:2b")
+        {
+            config.providers.insert(
+                "opencode".into(),
+                ProviderConfig {
+                    api_key: String::new(),
+                    model: None,
+                },
+            );
+            config.selected_provider = Some("opencode".into());
+        }
         Ok(Self {
             path,
             config: Mutex::new(config),
@@ -150,6 +183,7 @@ mod tests {
         // Safety: tests in this module are the only env mutators and run serially per-process env.
         unsafe { std::env::set_var("MYOS_STATE_DIR", dir.path()) };
         let store = Store::load().unwrap();
+        assert_eq!(store.get().selected_provider.as_deref(), Some("opencode"));
         store
             .update(|c| {
                 c.selected_provider = Some("anthropic".into());

@@ -145,6 +145,7 @@ pub async fn run_loop(store: &Arc<Store>, loop_id: &str) -> Result<LoopRunRecord
                 &model,
                 &system,
                 vec![("user".into(), user)],
+                def.level >= 3,
             );
             let mut full = String::new();
             let mut failed = None;

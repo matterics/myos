@@ -9,7 +9,8 @@ import 'package:xterm/xterm.dart';
 import '../main.dart';
 
 class TerminalScreen extends StatefulWidget {
-  const TerminalScreen({super.key});
+  const TerminalScreen({super.key, this.initialCommand});
+  final String? initialCommand;
 
   @override
   State<TerminalScreen> createState() => _TerminalScreenState();
@@ -50,6 +51,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
       });
       terminal.onOutput = (data) => p.write(const Utf8Encoder().convert(data));
       terminal.onResize = (w, h, pw, ph) => p.resize(h, w);
+      if (widget.initialCommand case final command?) {
+        Future<void>.delayed(const Duration(milliseconds: 250), () {
+          if (mounted) p.write(const Utf8Encoder().convert('$command\r'));
+        });
+      }
     } on Object catch (e) {
       setState(() => error = 'Could not start shell: $e');
     }
@@ -66,8 +72,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyT,
-                control: true, shift: true):
-            () => Navigator.of(context).pop(),
+            control: true, shift: true): () => Navigator.of(context).pop(),
         const SingleActivator(LogicalKeyboardKey.keyT, meta: true, shift: true):
             () => Navigator.of(context).pop(),
       },

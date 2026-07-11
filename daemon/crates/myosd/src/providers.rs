@@ -12,16 +12,16 @@ pub struct ProviderInfo {
 
 pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
+        id: "opencode",
+        name: "OpenCode (default runtime)",
+    },
+    ProviderInfo {
         id: "anthropic",
         name: "Anthropic (Claude)",
     },
     ProviderInfo {
         id: "openai",
         name: "OpenAI",
-    },
-    ProviderInfo {
-        id: "opencode",
-        name: "OpenCode CLI",
     },
     ProviderInfo {
         id: "local",
@@ -231,6 +231,7 @@ pub fn stream_chat(
     model: &str,
     system: &str,
     history: Vec<Turn>,
+    auto_approve: bool,
 ) -> mpsc::Receiver<Result<String>> {
     let (tx, rx) = mpsc::channel(64);
     let provider = provider.to_string();
@@ -240,7 +241,7 @@ pub fn stream_chat(
     tokio::spawn(async move {
         let result = match provider.as_str() {
             "anthropic" => anthropic_chat(&tx, &api_key, &model, &system, &history).await,
-            "opencode" => opencode_chat(&tx, &model, &system, &history).await,
+            "opencode" => opencode_chat(&tx, &model, &system, &history, auto_approve).await,
             "openai" => {
                 openai_chat(
                     &tx,
@@ -275,20 +276,19 @@ pub fn stream_chat(
 async fn opencode_chat(
     tx: &mpsc::Sender<Result<String>>,
     model: &str,
-    _system: &str,
+    system: &str,
     history: &[Turn],
+    auto_approve: bool,
 ) -> Result<()> {
     use std::process::Stdio;
     use tokio::io::AsyncReadExt;
     use tokio::process::Command;
 
-    let last_user_msg = history
-        .iter()
-        .rev()
-        .find(|(role, _)| role == "user")
-        .map(|(_, t)| t)
-        .unwrap_or(&String::new())
-        .clone();
+    let mut prompt = format!("{system}\n\n[MyOS shared conversation context]\n");
+    for (role, text) in history {
+        prompt.push_str(&format!("\n{role}: {text}\n"));
+    }
+    prompt.push_str("\nRespond to the last user message.");
 
     // Non-interactive run: `opencode run [message] -m provider/model`
     let mut cmd = Command::new("opencode");
@@ -296,8 +296,11 @@ async fn opencode_chat(
     if !model.is_empty() {
         cmd.arg("--model").arg(model);
     }
+    if auto_approve {
+        cmd.arg("--auto");
+    }
     let mut child = cmd
-        .arg(&last_user_msg)
+        .arg(&prompt)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -336,6 +339,40 @@ async fn opencode_chat(
         }
     }
     Ok(())
+}
+
+pub fn commands(provider: &str) -> Vec<(&'static str, &'static str)> {
+    let mut commands = vec![
+        ("/new", "Start a new MyOS conversation"),
+        ("/history", "Open MyOS conversation history"),
+        ("/optimize", "Toggle prompt optimization"),
+    ];
+    match provider {
+        "opencode" => commands.extend([
+            ("/session", "List OpenCode sessions"),
+            ("/models", "Refresh OpenCode models"),
+            ("/connect", "Connect a model provider through OpenCode"),
+            ("/mcp", "Show configured OpenCode MCP servers"),
+            ("/stats", "Show OpenCode token and cost statistics"),
+        ]),
+        _ => {}
+    }
+    commands
+}
+
+pub fn context_window(model: &str) -> u64 {
+    if model.contains("gemma:2b") {
+        8_192
+    } else {
+        128_000
+    }
+}
+
+pub fn estimate_tokens(history: &[Turn]) -> u64 {
+    history
+        .iter()
+        .map(|(_, text)| (text.chars().count() as u64).div_ceil(4) + 4)
+        .sum()
 }
 
 async fn anthropic_chat(
@@ -536,5 +573,15 @@ mod tests {
     fn unknown_provider_has_no_models() {
         assert!(models("acme").is_empty());
         assert_eq!(default_model("acme"), None);
+    }
+
+    #[test]
+    fn opencode_exposes_runtime_commands_and_shared_context_count() {
+        assert!(
+            commands("opencode")
+                .iter()
+                .any(|(name, _)| *name == "/session")
+        );
+        assert_eq!(estimate_tokens(&[("user".into(), "12345678".into())]), 6);
     }
 }
