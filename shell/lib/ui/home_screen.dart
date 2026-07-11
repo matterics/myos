@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../ipc/agent_client.dart';
 import '../main.dart';
+import 'loops_sheet.dart';
 import 'provider_sheet.dart';
 import 'terminal_screen.dart';
 
@@ -137,7 +138,21 @@ class _HomeScreenState extends State<HomeScreen> {
               if (provider != null && ipc.models != null) ...[
                 const SizedBox(width: 8),
                 _modelChip(provider, modelName),
+                const SizedBox(width: 8),
+                _Chip(
+                  icon: Icons.delete_outline,
+                  label: 'Clear Chat',
+                  onTap: () => ipc.clearChat(),
+                ),
               ],
+              const SizedBox(width: 8),
+              _Chip(
+                icon: Icons.all_inclusive,
+                label: ipc.loops?.loops.isEmpty ?? true
+                    ? 'Loops'
+                    : 'Loops (${ipc.loops!.loops.length})',
+                onTap: () => showLoopsSheet(context, ipc),
+              ),
             ],
           ),
           const SizedBox(height: 8),

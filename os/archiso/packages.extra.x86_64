@@ -8,8 +8,14 @@ myos-settings
 myos-shell
 myosd
 networkmanager
+nodejs
 noto-fonts
+npm
+ollama
 open-vm-tools
+python
+python-pip
+python-pipx
 qemu-guest-agent
 ttf-jetbrains-mono
 xorg-xwayland

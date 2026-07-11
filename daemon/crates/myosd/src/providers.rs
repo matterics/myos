@@ -19,6 +19,14 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         id: "openai",
         name: "OpenAI",
     },
+    ProviderInfo {
+        id: "opencode",
+        name: "OpenCode CLI",
+    },
+    ProviderInfo {
+        id: "local",
+        name: "Local (Ollama / OpenAI-Compatible)",
+    },
 ];
 
 pub struct ModelInfo {
@@ -56,6 +64,9 @@ pub fn models(provider: &str) -> &'static [ModelInfo] {
                 name: "GPT-4o mini",
             },
         ],
+        // Local models come from the running Ollama instance (fetch_models);
+        // a static list here would offer models that are not installed.
+        "local" => &[],
         _ => &[],
     }
 }
@@ -64,10 +75,108 @@ pub fn default_model(provider: &str) -> Option<&'static str> {
     models(provider).first().map(|m| m.id)
 }
 
+pub async fn fetch_models(provider: &str, api_key: &str) -> Option<Vec<(String, String)>> {
+    if provider == "opencode" {
+        // Try fetching from the OpenCode CLI
+        if let Ok(output) = std::process::Command::new("opencode").arg("models").output() {
+            let out_str = String::from_utf8_lossy(&output.stdout);
+            let mut res = Vec::new();
+            for line in out_str.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with("Error") {
+                    res.push((trimmed.to_string(), trimmed.to_string()));
+                }
+            }
+            if !res.is_empty() {
+                return Some(res);
+            }
+        }
+        // Fallback: let OpenCode use its own configured default model.
+        return Some(vec![(String::new(), "OpenCode default".into())]);
+    }
+    
+    if provider == "local" {
+        let base_url = local_base_url(api_key);
+        let resp = reqwest::Client::new().get(format!("{base_url}/models")).send().await.ok()?;
+        let json: serde_json::Value = resp.json().await.ok()?;
+        if let Some(data) = json["data"].as_array() {
+            // An empty list is a real answer (Ollama up, nothing installed).
+            return Some(
+                data.iter()
+                    .filter_map(|item| item["id"].as_str())
+                    .map(|id| (id.to_string(), id.to_string()))
+                    .collect(),
+            );
+        }
+    }
+    None
+}
+
+/// The model a chat/loop run should use for `provider`, resolving local
+/// models against what Ollama actually has installed.
+pub async fn effective_model(
+    provider: &str,
+    api_key: &str,
+    configured: Option<&str>,
+) -> Result<String> {
+    if provider == "local" {
+        return resolve_local_model(api_key, configured).await;
+    }
+    // OpenCode picks its own default model when none is passed.
+    if provider == "opencode" {
+        return Ok(configured.unwrap_or_default().to_string());
+    }
+    configured
+        .map(String::from)
+        .or_else(|| default_model(provider).map(String::from))
+        .ok_or_else(|| anyhow!("no model selected for provider '{provider}'"))
+}
+
+pub fn local_base_url(api_key: &str) -> String {
+    if api_key.is_empty() {
+        "http://127.0.0.1:11434/v1".into()
+    } else {
+        api_key.trim_end_matches('/').to_string()
+    }
+}
+
+/// Resolve which local model to use: the configured one if installed,
+/// otherwise the first installed model. Errors when none are installed.
+pub async fn resolve_local_model(api_key: &str, want: Option<&str>) -> Result<String> {
+    let installed = fetch_models("local", api_key)
+        .await
+        .ok_or_else(|| anyhow!("The local AI runtime (Ollama) is not reachable."))?;
+    if let Some(want) = want {
+        if installed.iter().any(|(id, _)| id == want) {
+            return Ok(want.to_string());
+        }
+    }
+    installed
+        .first()
+        .map(|(id, _)| id.clone())
+        .ok_or_else(|| {
+            anyhow!(
+                "No local models are installed. Open the terminal (Ctrl+Shift+T) and run \
+                 `ollama pull gemma:2b`, then try again."
+            )
+        })
+}
+
 /// Cheap key validation: list models. Free on both APIs, no tokens spent.
 pub async fn validate_key(provider: &str, api_key: &str) -> Result<()> {
     let client = reqwest::Client::new();
     let resp = match provider {
+        "opencode" => {
+            // No key to validate (OpenCode manages its own auth) — just make
+            // sure the CLI is actually present.
+            return match std::process::Command::new("opencode").arg("--version").output() {
+                Ok(out) if out.status.success() => Ok(()),
+                _ => bail!(
+                    "The OpenCode CLI is not installed. Open the terminal (Ctrl+Shift+T) and run \
+                     `npm install -g opencode-ai`, then run `opencode auth login`."
+                ),
+            };
+        }
         "anthropic" => {
             client
                 .get("https://api.anthropic.com/v1/models")
@@ -80,6 +189,17 @@ pub async fn validate_key(provider: &str, api_key: &str) -> Result<()> {
             client
                 .get("https://api.openai.com/v1/models")
                 .bearer_auth(api_key)
+                .send()
+                .await?
+        }
+        "local" => {
+            let base_url = if api_key.is_empty() {
+                "http://127.0.0.1:11434/v1"
+            } else {
+                api_key.trim_end_matches('/')
+            };
+            client
+                .get(format!("{base_url}/models"))
                 .send()
                 .await?
         }
@@ -116,7 +236,13 @@ pub fn stream_chat(
     tokio::spawn(async move {
         let result = match provider.as_str() {
             "anthropic" => anthropic_chat(&tx, &api_key, &model, &system, &history).await,
-            "openai" => openai_chat(&tx, &api_key, &model, &system, &history).await,
+            "opencode" => {
+                opencode_chat(&tx, &model, &system, &history).await
+            }
+            "openai" => openai_chat(&tx, "https://api.openai.com/v1", &api_key, &model, &system, &history).await,
+            "local" => {
+                openai_chat(&tx, &local_base_url(&api_key), "", &model, &system, &history).await
+            }
             other => Err(anyhow!("unknown provider '{other}'")),
         };
         if let Err(e) = result {
@@ -124,6 +250,72 @@ pub fn stream_chat(
         }
     });
     rx
+}
+
+async fn opencode_chat(
+    tx: &mpsc::Sender<Result<String>>,
+    model: &str,
+    _system: &str,
+    history: &[Turn],
+) -> Result<()> {
+    use tokio::process::Command;
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+
+    let last_user_msg = history
+        .iter()
+        .rev()
+        .find(|(role, _)| role == "user")
+        .map(|(_, t)| t)
+        .unwrap_or(&String::new())
+        .clone();
+
+    // Non-interactive run: `opencode run [message] -m provider/model`
+    let mut cmd = Command::new("opencode");
+    cmd.arg("run");
+    if !model.is_empty() {
+        cmd.arg("--model").arg(model);
+    }
+    let mut child = cmd
+        .arg(&last_user_msg)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to start the OpenCode CLI. It ships with MyOS; if missing, run `npm install -g opencode-ai`.")?;
+
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let mut buf = vec![0; 1024];
+    let mut got_output = false;
+
+    while let Ok(n) = stdout.read(&mut buf).await {
+        if n == 0 {
+            break;
+        }
+        got_output = true;
+        let text = String::from_utf8_lossy(&buf[..n]).to_string();
+        if tx.send(Ok(text)).await.is_err() {
+            break;
+        }
+    }
+
+    let status = child.wait().await;
+    if !got_output {
+        let mut err_text = String::new();
+        let _ = stderr.read_to_string(&mut err_text).await;
+        let failed = !matches!(&status, Ok(s) if s.success());
+        if failed || !err_text.trim().is_empty() {
+            bail!(
+                "OpenCode produced no reply{}",
+                if err_text.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", err_text.trim())
+                }
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn anthropic_chat(
@@ -205,6 +397,7 @@ async fn anthropic_chat(
 
 async fn openai_chat(
     tx: &mpsc::Sender<Result<String>>,
+    base_url: &str,
     api_key: &str,
     model: &str,
     system: &str,
@@ -221,13 +414,18 @@ async fn openai_chat(
         "stream": true,
         "messages": messages,
     });
-    let resp = reqwest::Client::new()
-        .post("https://api.openai.com/v1/chat/completions")
-        .bearer_auth(api_key)
+    let mut req = reqwest::Client::new()
+        .post(format!("{base_url}/chat/completions"));
+    
+    if !api_key.is_empty() {
+        req = req.bearer_auth(api_key);
+    }
+    
+    let resp = req
         .json(&body)
         .send()
         .await
-        .context("reach api.openai.com")?;
+        .context(format!("reach {base_url}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();

@@ -10,11 +10,77 @@ pub struct ProviderConfig {
     pub model: Option<String>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopDef {
+    pub id: String,
+    pub name: String,
+    pub goal: String,
+    pub interval_minutes: u32,
+    pub level: u8,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub last_run_at: Option<i64>,
+    pub run_count: u32,
+    pub project_name: Option<String>,
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopRunRecord {
+    pub id: String,
+    pub loop_id: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub succeeded: bool,
+    pub report: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectDef {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub created_by_loop_id: String,
+    pub created_at: i64,
+}
+
+/// Keep only the newest runs per loop to bound the state file.
+pub const MAX_RUNS_PER_LOOP: usize = 20;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub selected_provider: Option<String>,
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
+    #[serde(default)]
+    pub history: HashMap<String, Vec<(String, String)>>,
+    #[serde(default)]
+    pub loops: HashMap<String, LoopDef>,
+    #[serde(default)]
+    pub loop_runs: HashMap<String, Vec<LoopRunRecord>>,
+    #[serde(default)]
+    pub projects: HashMap<String, ProjectDef>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "local".to_string(),
+            ProviderConfig {
+                api_key: "http://127.0.0.1:11434/v1".to_string(),
+                model: Some("gemma:2b".to_string()),
+            },
+        );
+        Self {
+            selected_provider: Some("local".to_string()),
+            providers,
+            history: HashMap::new(),
+            loops: HashMap::new(),
+            loop_runs: HashMap::new(),
+            projects: HashMap::new(),
+        }
+    }
 }
 
 pub struct Store {
@@ -68,7 +134,7 @@ impl Store {
     }
 }
 
-fn state_dir() -> PathBuf {
+pub fn state_dir() -> PathBuf {
     std::env::var_os("MYOS_STATE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/var/lib/myos"))

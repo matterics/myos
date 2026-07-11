@@ -102,13 +102,37 @@ class _ProviderSheetState extends State<_ProviderSheet> {
               child: Text(selected ? 'Selected' : 'Use'),
             )
           : FilledButton.tonal(
-              onPressed: () => _connectDialog(context, p),
+              // OpenCode needs no key — it manages its own auth.
+              onPressed: () => p.id == 'opencode'
+                  ? _connectDirect(p)
+                  : _connectDialog(context, p),
               child: const Text('Connect'),
             ),
       onTap: p.connected && !selected
           ? () => widget.ipc.selectProvider(p.id)
           : null,
     );
+  }
+
+  Future<void> _connectDirect(Provider p) async {
+    try {
+      await for (final progress in widget.ipc.connectProvider(p.id, '')) {
+        if (progress.state == ConnectState.CONNECT_STATE_CONNECTED) {
+          await widget.ipc.refresh();
+          await widget.ipc.selectProvider(p.id);
+        } else if (progress.state == ConnectState.CONNECT_STATE_FAILED) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(progress.message)),
+          );
+        }
+      }
+    } on Object catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to connect OpenCode: $e')),
+      );
+    }
   }
 
   Future<void> _connectDialog(BuildContext context, Provider p) async {
@@ -127,12 +151,12 @@ class _ProviderSheetState extends State<_ProviderSheet> {
             children: [
               TextField(
                 controller: keyController,
-                obscureText: true,
+                obscureText: p.authKind != AuthKind.AUTH_KIND_LOCAL,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'API key',
-                  hintText: 'Paste your API key',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: p.authKind == AuthKind.AUTH_KIND_LOCAL ? 'Base URL' : 'API key',
+                  hintText: p.authKind == AuthKind.AUTH_KIND_LOCAL ? 'e.g. http://127.0.0.1:11434/v1' : 'Paste your API key',
+                  border: const OutlineInputBorder(),
                 ),
               ),
               if (status != null) ...[

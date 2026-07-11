@@ -16,6 +16,101 @@ service Agent {
   rpc SelectModel(SelectModelRequest) returns (google.protobuf.Empty);
   rpc GetAuditLog(AuditQuery) returns (stream AuditEntry);
   rpc Onboard(OnboardConfig) returns (google.protobuf.Empty);
+  rpc GetChatHistory(google.protobuf.Empty) returns (ChatHistoryList);
+
+  // Loop engineering: loops are the first-class unit of work. A loop runs on a
+  // cadence toward a goal; projects are created and advanced by loops, never
+  // directly.
+  rpc CreateLoop(LoopSpec) returns (Loop);
+  rpc ListLoops(google.protobuf.Empty) returns (LoopList);
+  rpc SetLoopEnabled(SetLoopEnabledRequest) returns (Loop);
+  rpc RunLoopNow(LoopId) returns (LoopRun);
+  rpc DeleteLoop(LoopId) returns (google.protobuf.Empty);
+  rpc GetLoopRuns(LoopId) returns (LoopRunList);
+  rpc ListProjects(google.protobuf.Empty) returns (ProjectList);
+}
+
+message LoopSpec {
+  string name = 1;
+  // The standing prompt executed every run.
+  string goal = 2;
+  uint32 interval_minutes = 3;
+  // Optional: the loop creates and owns this project on its first run.
+  string project_name = 4;
+  LoopLevel level = 5;
+}
+
+// Phased autonomy ladder (loop-engineering: L1 report -> L2 assisted -> L3 unattended).
+enum LoopLevel {
+  LOOP_LEVEL_UNSPECIFIED = 0;
+  LOOP_LEVEL_REPORT = 1;
+  LOOP_LEVEL_ASSISTED = 2;
+  LOOP_LEVEL_UNATTENDED = 3;
+}
+
+message Loop {
+  string id = 1;
+  LoopSpec spec = 2;
+  bool enabled = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp last_run_at = 5;
+  uint32 run_count = 6;
+  string project_id = 7;
+}
+
+message LoopList {
+  repeated Loop loops = 1;
+}
+
+message LoopId {
+  string id = 1;
+}
+
+message SetLoopEnabledRequest {
+  string id = 1;
+  bool enabled = 2;
+}
+
+message LoopRun {
+  string id = 1;
+  string loop_id = 2;
+  google.protobuf.Timestamp started_at = 3;
+  google.protobuf.Timestamp finished_at = 4;
+  LoopRunStatus status = 5;
+  string report = 6;
+}
+
+enum LoopRunStatus {
+  LOOP_RUN_STATUS_UNSPECIFIED = 0;
+  LOOP_RUN_STATUS_RUNNING = 1;
+  LOOP_RUN_STATUS_SUCCEEDED = 2;
+  LOOP_RUN_STATUS_FAILED = 3;
+}
+
+message LoopRunList {
+  repeated LoopRun runs = 1;
+}
+
+message Project {
+  string id = 1;
+  string name = 2;
+  string path = 3;
+  string created_by_loop_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message ProjectList {
+  repeated Project projects = 1;
+}
+
+message ChatHistoryList {
+  repeated ChatSession sessions = 1;
+}
+
+message ChatSession {
+  string id = 1;
+  string preview = 2;
+  google.protobuf.Timestamp last_updated = 3;
 }
 
 message ClientEvent {

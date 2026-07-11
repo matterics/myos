@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:grpc/grpc.dart';
 
 import '../gen/agent.pbgrpc.dart';
-import '../gen/google/protobuf/empty.pb.dart';
+import 'package:protobuf/well_known_types/google/protobuf/empty.pb.dart';
 
 export '../gen/agent.pbgrpc.dart';
 
@@ -38,6 +38,10 @@ class AgentIpc extends ChangeNotifier {
   DeviceProfile? profile;
   ProviderList? providers;
   ModelList? models;
+  LoopList? loops;
+  ProjectList? projects;
+  
+  String currentConversationId = 'default';
 
   String get agentName => profile?.agentName.isNotEmpty == true ? profile!.agentName : 'MyOS';
 
@@ -79,7 +83,9 @@ class AgentIpc extends ChangeNotifier {
   }
 
   Timer? _reconnect;
+  bool _disposed = false;
   void _scheduleReconnect() {
+    if (_disposed) return;
     _reconnect ??= Timer(const Duration(seconds: 2), () {
       _reconnect = null;
       _openChatStream();
@@ -96,11 +102,59 @@ class AgentIpc extends ChangeNotifier {
       models = selected.isEmpty
           ? null
           : await _stub.listModels(ProviderId(id: selected));
+      loops = await _stub.listLoops(Empty());
+      projects = await _stub.listProjects(Empty());
     } on Object {
       daemonUp = false;
     }
     notifyListeners();
   }
+
+  Future<void> refreshLoops() async {
+    try {
+      loops = await _stub.listLoops(Empty());
+      projects = await _stub.listProjects(Empty());
+      daemonUp = true;
+    } on Object {
+      daemonUp = false;
+    }
+    notifyListeners();
+  }
+
+  Future<Loop> createLoop({
+    required String name,
+    required String goal,
+    required int intervalMinutes,
+    String projectName = '',
+  }) async {
+    final created = await _stub.createLoop(LoopSpec(
+      name: name,
+      goal: goal,
+      intervalMinutes: intervalMinutes,
+      projectName: projectName,
+      level: LoopLevel.LOOP_LEVEL_REPORT,
+    ));
+    await refreshLoops();
+    return created;
+  }
+
+  Future<void> setLoopEnabled(String id, bool enabled) async {
+    await _stub.setLoopEnabled(SetLoopEnabledRequest(id: id, enabled: enabled));
+    await refreshLoops();
+  }
+
+  Future<LoopRun> runLoopNow(String id) async {
+    final run = await _stub.runLoopNow(LoopId(id: id));
+    await refreshLoops();
+    return run;
+  }
+
+  Future<void> deleteLoop(String id) async {
+    await _stub.deleteLoop(LoopId(id: id));
+    await refreshLoops();
+  }
+
+  Future<LoopRunList> loopRuns(String id) => _stub.getLoopRuns(LoopId(id: id));
 
   void _onServerEvent(ServerEvent ev) {
     daemonUp = true;
@@ -125,15 +179,56 @@ class AgentIpc extends ChangeNotifier {
     notifyListeners();
   }
 
-  void send(String text) {
+  void send(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty || busy || _outgoing == null) return;
+
+    if (trimmed == '/new') {
+      clearChat();
+      return;
+    }
+
+    if (trimmed == '/history') {
+      messages.add(ChatMessage('user', trimmed));
+      busy = true;
+      notifyListeners();
+      try {
+        final hist = await _stub.getChatHistory(Empty());
+        final sb = StringBuffer('**Chat History:**\n\n');
+        if (hist.sessions.isEmpty) {
+          sb.writeln('No past conversations found.');
+        } else {
+          for (var i = 0; i < hist.sessions.length; i++) {
+            final s = hist.sessions[i];
+            sb.writeln('`[${s.id}]` - ${s.preview.replaceAll('\n', ' ')}');
+          }
+          sb.writeln('\nUse `/load <id>` to resume a conversation.');
+        }
+        messages.add(ChatMessage('assistant', sb.toString()));
+      } catch (e) {
+        messages.add(ChatMessage('assistant', 'Failed to fetch history: $e', isError: true));
+      }
+      busy = false;
+      notifyListeners();
+      return;
+    }
+
+    if (trimmed.startsWith('/load ')) {
+      final targetId = trimmed.substring(6).trim();
+      currentConversationId = targetId;
+      messages.clear();
+      messages.add(ChatMessage('assistant', 'Switched to conversation `$targetId`.\n\nThe AI now remembers this context, but past messages are hidden from the UI to save screen space.'));
+      _openChatStream();
+      notifyListeners();
+      return;
+    }
+
     messages.add(ChatMessage('user', trimmed));
     busy = true;
     notifyListeners();
     _outgoing!.add(ClientEvent(
       message: UserMessage(
-        conversationId: 'default',
+        conversationId: currentConversationId,
         text: trimmed,
         source: MessageSource.MESSAGE_SOURCE_TEXT,
       ),
@@ -144,6 +239,13 @@ class AgentIpc extends ChangeNotifier {
     return _stub.connectProvider(
       ConnectRequest(providerId: providerId, apiKey: apiKey),
     );
+  }
+
+  void clearChat() {
+    currentConversationId = DateTime.now().toIso8601String();
+    messages.clear();
+    _openChatStream();
+    notifyListeners();
   }
 
   Future<void> selectProvider(String providerId) async {
@@ -160,6 +262,9 @@ class AgentIpc extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _reconnect?.cancel();
+    _reconnect = null;
     _incoming?.cancel();
     _outgoing?.close();
     _channel.shutdown();

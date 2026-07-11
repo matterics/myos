@@ -3,6 +3,9 @@ SHELL := /bin/bash
 IMAGE ?= myos-build
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
 ROOT := $(CURDIR)
+# Host Ollama dir whose models get bundled into the ISO. From WSL, point it
+# at the Windows install: make iso OLLAMA_HOME=/mnt/c/Users/<you>/.ollama
+OLLAMA_HOME ?= $(HOME)/.ollama
 
 .DEFAULT_GOAL := help
 
@@ -39,7 +42,7 @@ pkgs: image
 
 iso: image
 	$(CONTAINER_ENGINE) volume create myos-pacman-cache >/dev/null
-	$(CONTAINER_ENGINE) run --rm --privileged -v "$(ROOT):/src" -v "myos-pacman-cache:/var/cache/pacman/pkg" -w /src $(IMAGE) bash ./scripts/build-iso.sh
+	$(CONTAINER_ENGINE) run --rm --privileged -v "$(ROOT):/src" -v "$(OLLAMA_HOME):/root/.ollama_host" -v "myos-pacman-cache:/var/cache/pacman/pkg" -w /src $(IMAGE) bash ./scripts/build-iso.sh
 
 run-qemu:
 	@./scripts/run-qemu.sh uefi

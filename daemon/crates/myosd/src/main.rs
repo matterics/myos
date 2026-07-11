@@ -1,6 +1,7 @@
 mod pb {
     tonic::include_proto!("myos.agent.v1");
 }
+mod loops;
 mod providers;
 mod service;
 mod state;
@@ -50,6 +51,7 @@ async fn serve(socket: &Path) -> Result<()> {
     println!("myosd listening on {}", socket.display());
 
     let store = Arc::new(state::Store::load().context("load provider config")?);
+    loops::spawn_scheduler(store.clone());
     let svc = service::AgentService::new(store);
 
     tonic::transport::Server::builder()
